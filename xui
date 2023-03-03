@@ -1,0 +1,272 @@
+#!/bin/bash
+
+RD='\033[0;31m'
+GN='\033[0;32m'
+YW='\033[0;33m'
+RT='\033[0m'
+
+usage() {
+    echo -e "${GN} [!] Parameters:${RT}"
+    echo -e "     -u|--username        User to use with x-ui panel installation (optional, default = admin)."
+    echo -e "     -p|--password        Password to use with x-ui panel installation (optional, default = admin)."
+    echo -e "     -o|--port            Port to use with x-ui panel installation (optional, default = 54321)."
+    echo -e "     -w|--webpath         A random 4 letter phrase to customize x-ui default login URL (optional, default = panel)."
+    echo -e "     -e|--email           Email to use when getting SSL with Let's encrypt."
+    echo -e "     -d|--domain-direct   Main (sub)domain on Cloudflare with proxy CDN OFF."
+    echo -e "     -c|--domain-cdn      Secondary (sub)domain on Cloudflare with proxy CDN ON."
+    echo -e "     -t|--timezone        Timezone to use with x-ui panel installation (optional, default = Asia/Tehran)."
+    echo -e "     --pre                One word name of this server for organizational porpuse (no spaces)."
+    echo -e "                              This word will be added to the begining of the connection name."
+    echo -e ""
+    echo -e "${GN} [!] Example:${RT}"
+    echo -e "     bash <(curl -Ls https://raw.githubusercontent.com/leomoon/x-ui-automation/master/xui) --username admin --password admin --port 46321 --email email@domain.com --webpath panel --domain-direct srv1d.domain.com --domain-cdn srv1c.domain.com --pre srv1"
+    echo -e ""
+    echo -e "     This will setup FranzKafkaYu/x-ui on your vps:"
+    echo -e "     - Update and install required packages"
+    echo -e "     - Issue certificate for both domains using acme"
+    echo -e "     - Install and configure FranzKafkaYu/x-ui with defined user, pass, port"
+    echo -e "     - Also allows defining timezone, and customizing x-ui's default login URL"
+    echo -e "     - Create all the possible connections with best configuration"
+    exit 1;
+}
+
+POSITIONAL=()
+while [[ $# -gt 0 ]]; do
+    key="$1"
+    case $key in
+        -d|--domain-direct)
+        XDOMAIND="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -c|--domain-cdn)
+        XDOMAINC="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -u|--username)
+        XUSER="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -p|--password)
+        XPASS="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -w|--webpath)
+        XWEBP="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -o|--port)
+        XPORT="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -e|--email)
+        XEMAIL="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        -t|--timezone)
+        XZONE="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        --pre)
+        PRE="$2"
+        shift #past argument
+        shift #past value
+        ;;
+        *)    #unknown option
+        usage
+        ;;
+    esac
+done
+set -- "${POSITIONAL[@]}"
+
+if [[ -z $XDOMAIND ]] || [[ -z $XDOMAINC ]] || [[ -z $XEMAIL ]]; then usage; fi
+
+# make sure dns is pointing to this server
+echo -e "${YW} [!] Checking IP <=> Domain...${RT}"
+RESIP=$(dig +short "$XDOMAIND" | grep '^[.0-9]*$' || echo 'NONE')
+SRVIP=$(curl -qs http://checkip.amazonaws.com  | grep '^[.0-9]*$' || echo 'NONE')
+if [[ $RESIP == $SRVIP ]]; then
+    echo -e "${GN} [i] $RESIP => $XDOMAIND is valid.${RT}"
+else
+    echo -e "${RD} [x] ERROR! Server IP is $SRVIP but '$XDOMAIND' resolves to $RESIP${RT}."
+    echo -e "     If you have just updated the DNS record, wait a few minutes and then try again."
+    exit
+fi
+
+# remove x-ui if it exists
+HASXUI=$(which x-ui || echo "")
+if [[ ! -z $HASXUI ]]; then
+    echo -e "${YW} [!] Uninstalling existing x-ui...${RT}"
+    (echo "y" | x-ui uninstall) 2>> 2.log 1>> 1.log
+    rm "$HASXUI" -f
+fi
+
+# check other paramters
+if [[ -z $XUSER ]]; then XUSER='admin'; fi
+if [[ -z $XPASS ]]; then XPASS='admin'; fi
+if [[ -z $XPORT ]]; then XPORT='54321'; fi
+if [[ -z $XWEBP ]]; then XWEBP='panel'; fi
+if [[ -z $XZONE ]]; then XZONE='Asia/Tehran'; fi
+
+CRT_FILE='/root/cert.crt'
+KEY_FILE='/root/private.key'
+
+echo -e "${YW} [!] Updating system...${RT}"
+NEEDRESTART_SUSPEND=1 apt-get update && apt-get upgrade -y
+echo -e "${YW} [!] Installing required packages...${RT}"
+NEEDRESTART_SUSPEND=1 apt-get install curl socat cron coreutils jq -y
+
+echo -e "${YW} [!] Disabling ufw (firewall)...${RT}"
+echo "y" | ufw disable
+iptables -F
+if [[ ! -d /etc/iptables ]]; then mkdir /etc/iptables; fi
+iptables-save > /etc/iptables/rules.v4 && ip6tables-save > /etc/iptables/rules.v6
+
+sudo sysctl -w net.ipv6.conf.all.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.default.disable_ipv6=1
+sudo sysctl -w net.ipv6.conf.lo.disable_ipv6=1
+
+echo -e "${YW} [!] Issuing SSL certificate for $XDOMAIND and $XDOMAINC...${RT}"
+curl https://get.acme.sh | sh
+~/.acme.sh/acme.sh --set-default-ca --server letsencrypt
+~/.acme.sh/acme.sh --register-account -m $XEMAIL
+~/.acme.sh/acme.sh --issue -d $XDOMAIND -d $XDOMAINC --standalone
+~/.acme.sh/acme.sh --installcert -d $XDOMAIND -d $XDOMAINC --key-file $KEY_FILE --fullchain-file $CRT_FILE
+
+echo -e "${YW} [!] Installing x-ui...${RT}"
+wget https://raw.githubusercontent.com/FranzKafkaYu/x-ui/master/install.sh -O ~/x-install.sh
+echo "y
+$XUSER
+$XPASS
+$XPORT
+" | bash ~/x-install.sh;
+wget https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat -O /usr/local/x-ui/bin/dlc.dat
+wget https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/iran.dat -O /usr/local/x-ui/bin/iran.dat
+chmod 755 /usr/local/x-ui/bin/*
+
+# x-ui backup original
+if [[ ! -f "/etc/x-ui/x-ui.db.configured" ]]; then
+    cp /etc/x-ui/x-ui.db /etc/x-ui/x-ui.db.original
+    cp /usr/local/x-ui/bin/config.json /usr/local/x-ui/bin/config.json.original
+fi
+
+echo -e "${YW} [!] Configuring x-ui...${RT}"
+# x-ui auth
+TEMP=$(curl -s --cookie-jar cookies.txt "http://$XDOMAIND:$XPORT/login" --data-raw "username=$XUSER&password=$XPASS")
+# change x-ray version
+TEMP=$(curl -s --cookie cookies.txt "http://$XDOMAIND:$XPORT/server/installXray/v1.7.5" -X 'POST' -H 'Accept: application/json, text/plain, */*' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' -H 'X-Requested-With: XMLHttpRequest')
+# x-ui config
+TEMP=$(curl -s --cookie cookies.txt "http://$XDOMAIND:$XPORT/xui/setting/update" -H "Content-Type: application/json" -d '{"webListen":"","webPort":'"$XPORT"',"webCertFile":"'"$CRT_FILE"'","webKeyFile":"'"$KEY_FILE"'","webBasePath":"/'$XWEBP'/","tgBotEnable":false,"tgBotToken":"","tgBotChatId":0,"tgRunTime":"","tgNotifyExpireTimeDiff":0,"tgNotifyTrafficDiff":0,"cpulimitNotifyConfig":0,"xrayTemplateConfig":"{\n  \"api\": {\n    \"services\": [\n      \"HandlerService\",\n      \"LoggerService\",\n      \"StatsService\"\n    ],\n    \"tag\": \"api\"\n  },\n  \"inbounds\": [\n    {\n      \"listen\": \"127.0.0.1\",\n      \"port\": 62789,\n      \"protocol\": \"dokodemo-door\",\n      \"settings\": {\n        \"address\": \"127.0.0.1\"\n      },\n      \"tag\": \"api\"\n    }\n  ],\n  \"outbounds\": [\n    {\n      \"protocol\": \"freedom\",\n      \"settings\": {}\n    },\n    {\n      \"protocol\": \"blackhole\",\n      \"settings\": {},\n      \"tag\": \"blocked\"\n    }\n  ],\n  \"policy\": {\n    \"levels\": {\n      \"0\": {\n        \"handshake\": 10,\n        \"connIdle\": 100,\n        \"uplinkOnly\": 2,\n        \"downlinkOnly\": 3,\n        \"statsUserUplink\": true,\n        \"statsUserDownlink\": true,\n        \"bufferSize\": 10240\n      }\n    },\n    \"system\": {\n      \"statsInboundDownlink\": true,\n      \"statsInboundUplink\": true\n    }\n  },\n  \"routing\": {\n    \"rules\": [\n      {\n        \"inboundTag\": [\n          \"api\"\n        ],\n        \"outboundTag\": \"api\",\n        \"type\": \"field\"\n      },\n      {\n        \"ip\": [\n          \"geoip:private\"\n        ],\n        \"outboundTag\": \"blocked\",\n        \"type\": \"field\"\n      },\n      {\n        \"outboundTag\": \"blocked\",\n        \"protocol\": [\n          \"bittorrent\"\n        ],\n        \"type\": \"field\"\n      },\n      {\n        \"outboundTag\": \"blocked\",\n        \"domain\": [\n          \"regexp:.*\\\\.ir$\",\n          \"ext:iran.dat:ir\",\n          \"geosite:category-ir-gov\",\n          \"geosite:category-ir-news\",\n          \"geosite:category-ir-bank\",\n          \"geosite:category-ir-tech\",\n          \"geosite:category-ir-travel\",\n          \"geosite:category-ir-shopping\",\n          \"geosite:category-ir-insurance\",\n          \"geosite:category-ir-scholar\",\n          \"ext:iran.dat:other\",\n          \"snapp\",\n          \"digikala\",\n          \"tapsi\",\n          \"blogfa\",\n          \"bank\",\n          \"sb24.com\",\n          \"sheypoor.com\",\n          \"tebyan.net\",\n          \"beytoote.com\",\n          \"telewebion.com\",\n          \"Film2movie.ws\",\n          \"Setare.com\",\n          \"Filimo.com\",\n          \"Torob.com\",\n          \"Tgju.org\",\n          \"Sarzamindownload.com\",\n          \"downloadha.com\",\n          \"P30download.com\",\n          \"Sanjesh.org\"\n        ],\n        \"type\": \"field\"\n      }\n    ]\n  },\n  \"stats\": {}\n}","XrayVersion":"","timeLocation":"'"$XZONE"'"}')
+
+# x-ui restart
+echo -e "${YW} [!] Restarting x-ui...${RT}"
+x-ui restart > /dev/null 2>&1
+
+# x-ui backup
+cp /etc/x-ui/x-ui.db /etc/x-ui/x-ui.db.ssl
+cp /usr/local/x-ui/bin/config.json /usr/local/x-ui/bin/config.json.ssl
+
+# functions
+function vless_id(){
+    printf "%04x%04x-%04x-%04x-%04x-%04x%04x%04x\n" \
+    $RANDOM $RANDOM \
+    $RANDOM \
+    $(($RANDOM & 0x0fff | 0x4000)) \
+    $(($RANDOM & 0x3fff | 0x8000)) \
+    $RANDOM $RANDOM $RANDOM
+}
+function trojan_id(){
+    echo "$(cat /dev/urandom | tr -dc '[:alpha:]0-9' | fold -w 12 | head -n 1)"
+}
+function random_port(){
+    echo "$(shuf -i 10000-59999 -n 1)"
+}
+function linkGen(){
+    # linkGen <vless|trojan> <tcp|ws> <none|tls|xtls> <client_id> <port> <remark> <pre>
+    local PROTOCOL=$1
+    local NETWORK=$2
+    local ENCRYPTION=$3
+    local CLIENT_ID=$4
+    local PORT=$5
+    local REMARK=$6
+    local PRE=""
+    if ! [[ -z $7 ]]; then PRE="${7}_"; fi
+    # %24:$ %26:& %3D:=
+    # query used ports and fail if port already in use
+    local USEDPORTS=','$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/list" -X 'POST' -H 'Accept: application/json, text/plain, */*' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' -H 'X-Requested-With: XMLHttpRequest' | jq '.obj[].port' | tr '\n' ',')
+    if [[ $USEDPORTS =~ ','$PORT',' ]]; then echo -e "${RD} [x] ERROR! ${PRE}${REMARK}-${PORT} was not created. Port already in use.${RT}"; return 1; fi
+    if [[ $REMARK =~ "cdn" ]]; then SNI=$XDOMAINC; else SNI=$XDOMAIND; fi
+    if [[ $ENCRYPTION == 'xtls' ]]; then FLOW='xtls-rprx-direct'; FLOWLINK='&flow=xtls-rprx-direct'; else FLOW=''; FLOWLINK=''; fi
+    if [[ $ENCRYPTION == 'tls' ]]; then SNI_LINK="&sni=${SNI}"; else SNI_LINK=''; fi
+    if [[ $NETWORK == 'ws' ]]; then WS_PATH="&path=%2Fapi%2Fstream&host=${SNI}"; else WS_PATH=""; fi
+    if [[ $NETWORK == 'ws' && $ENCRYPTION == 'tls' ]]; then FP_LINK="&fp=chrome"; else FP_LINK=''; fi
+    if [[ $PROTOCOL == 'vmess' ]]; then
+        local OUTPUT=$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/add" --data-raw "up=0&down=0&total=0&remark=${PRE}${REMARK}-${PORT}&enable=true&expiryTime=0&listen=&port=$PORT&protocol=vmess&settings=%7B%0A%20%20%22clients%22%3A%20%5B%0A%20%20%20%20%7B%0A%20%20%20%20%20%20%22id%22%3A%20%22$CLIENT_ID%22%2C%0A%20%20%20%20%20%20%22alterId%22%3A%200%0A%20%20%20%20%7D%0A%20%20%5D%2C%0A%20%20%22decryption%22%3A%20%22none%22%2C%0A%20%20%22fallbacks%22%3A%20%5B%5D%0A%7D&streamSettings=%7B%0A%20%20%22network%22%3A%20%22$NETWORK%22%2C%0A%20%20%22security%22%3A%20%22$ENCRYPTION%22%2C%0A%20%20%22tlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22wsSettings%22%3A%20%7B%0A%20%20%20%20%22path%22%3A%20%22%2Fapi%2Fstream%22%2C%0A%20%20%20%20%22headers%22%3A%20%7B%0A%20%20%20%20%20%20%22User-Agent%22%3A%20%22okhttp%2F4.9.3%22%2C%0A%20%20%20%20%20%20%22Host%22%3A%20%22$SNI%22%0A%20%20%20%20%7D%0A%20%20%7D%0A%7D&sniffing=%7B%0A%20%20%22enabled%22%3A%20true%2C%0A%20%20%22destOverride%22%3A%20%5B%0A%20%20%20%20%22http%22%2C%0A%20%20%20%20%22tls%22%0A%20%20%5D%0A%7D") > /dev/null 2>&1
+        if [[ $OUTPUT =~ '"success":false' ]]; then
+            echo -e "${RD} [x] ERROR! ${PRE}${REMARK}-${PORT} was not created: ${OUTPUT//\\n/}${RT}"
+        else
+            echo -e "${GN} [i] Connection ${PRE}${REMARK}-${PORT} created successfully.${RT}"
+            BASE64=$(echo -e '{\n  "v": "2",\n  "ps": "'${PRE}${REMARK}-${PORT}'",\n  "add": "'$SNI'",\n  "port": '$PORT',\n  "id": "'$CLIENT_ID'",\n  "aid": 0,\n  "net": "'$NETWORK'",\n  "type": "none",\n  "host": "'$SNI'",\n  "path": "/api/stream",\n  "tls": "'$ENCRYPTION'"\n}' | base64 | tr -d '\n')
+            echo "vmess://$BASE64"  >> /root/panel.txt
+        fi
+    elif [[ $PROTOCOL == 'vless' ]]; then
+        local OUTPUT=$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/add" --data-raw "up=0&down=0&total=0&remark=${PRE}${REMARK}-${PORT}&enable=true&expiryTime=0&listen=&port=$PORT&protocol=vless&settings=%7B%0A%20%20%22clients%22%3A%20%5B%0A%20%20%20%20%7B%0A%20%20%20%20%20%20%22id%22%3A%20%22$CLIENT_ID%22%2C%0A%20%20%20%20%20%20%22flow%22%3A%20%22$FLOW%22%0A%20%20%20%20%7D%0A%20%20%5D%2C%0A%20%20%22decryption%22%3A%20%22none%22%2C%0A%20%20%22fallbacks%22%3A%20%5B%5D%0A%7D&streamSettings=%7B%0A%20%20%22network%22%3A%20%22$NETWORK%22%2C%0A%20%20%22security%22%3A%20%22$ENCRYPTION%22%2C%0A%20%20%22xtlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22tlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22wsSettings%22%3A%20%7B%0A%20%20%20%20%22path%22%3A%20%22%2Fapi%2Fstream%22%2C%0A%20%20%20%20%22headers%22%3A%20%7B%0A%20%20%20%20%20%20%22User-Agent%22%3A%20%22okhttp%2F4.9.3%22%2C%0A%20%20%20%20%20%20%22Host%22%3A%20%22$SNI%22%0A%20%20%20%20%7D%0A%20%20%7D%0A%7D&sniffing=%7B%0A%20%20%22enabled%22%3A%20true%2C%0A%20%20%22destOverride%22%3A%20%5B%0A%20%20%20%20%22http%22%2C%0A%20%20%20%20%22tls%22%0A%20%20%5D%0A%7D") > /dev/null 2>&1
+        if [[ $OUTPUT =~ '"success":false' ]]; then
+            echo -e "${RD} [x] ERROR! ${PRE}${REMARK}-${PORT} was not created: ${OUTPUT//\\n/}${RT}"
+        else
+            echo -e "${GN} [i] Connection ${PRE}${REMARK}-${PORT} created successfully.${RT}"
+            echo -e "vless://${CLIENT_ID}@${SNI}:${PORT}?type=${NETWORK}&security=${ENCRYPTION}${WS_PATH}${SNI_LINK}${FP_LINK}${FLOWLINK}#${PRE}${REMARK}-${PORT}" >> /root/panel.txt
+        fi
+    elif [[ $PROTOCOL == 'trojan' ]]; then
+        local OUTPUT=$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/add" --data-raw "up=0&down=0&total=0&remark=${PRE}${REMARK}-${PORT}&enable=true&expiryTime=0&listen=&port=$PORT&protocol=trojan&settings=%7B%0A%20%20%22clients%22%3A%20%5B%0A%20%20%20%20%7B%0A%20%20%20%20%20%20%22password%22%3A%20%22$CLIENT_ID%22%2C%0A%20%20%20%20%20%20%22flow%22%3A%20%22$FLOW%22%0A%20%20%20%20%7D%0A%20%20%5D%2C%0A%20%20%22fallbacks%22%3A%20%5B%5D%0A%7D&streamSettings=%7B%0A%20%20%22network%22%3A%20%22$NETWORK%22%2C%0A%20%20%22security%22%3A%20%22$ENCRYPTION%22%2C%0A%20%20%22xtlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22tlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22wsSettings%22%3A%20%7B%0A%20%20%20%20%22path%22%3A%20%22%2Fapi%2Fstream%22%2C%0A%20%20%20%20%22headers%22%3A%20%7B%0A%20%20%20%20%20%20%22User-Agent%22%3A%20%22okhttp%2F4.9.3%22%2C%0A%20%20%20%20%20%20%22Host%22%3A%20%22$SNI%22%0A%20%20%20%20%7D%0A%20%20%7D%0A%7D&sniffing=%7B%0A%20%20%22enabled%22%3A%20true%2C%0A%20%20%22destOverride%22%3A%20%5B%0A%20%20%20%20%22http%22%2C%0A%20%20%20%20%22tls%22%0A%20%20%5D%0A%7D") > /dev/null 2>&1
+        if [[ $OUTPUT =~ '"success":false' ]]; then
+            echo -e "${RD} [x] ERROR! ${PRE}${REMARK}-${PORT} was not created: ${OUTPUT//\\n/}${RT}"
+        else
+            echo -e "${GN} [i] Connection ${PRE}${REMARK}-${PORT} created successfully.${RT}"
+            echo -e "trojan://${CLIENT_ID}@${SNI}:${PORT}?type=${NETWORK}&security=${ENCRYPTION}${WS_PATH}${SNI_LINK}${FLOWLINK}#${PRE}${REMARK}-${PORT}" >> /root/panel.txt
+        fi
+    fi
+}
+
+# add panel info
+echo -e "\nPANEL INFO:" > /root/panel.txt
+echo -e "LINK: https://$XDOMAIND:$XPORT/$XWEBP/" >> /root/panel.txt
+echo -e "USER:  $XUSER" >> /root/panel.txt
+echo -e "PASS:  $XPASS" >> /root/panel.txt
+echo -e "\nCONNECTIONS:" >> /root/panel.txt
+
+# x-ui auth with https
+TEMP=$(curl -s --cookie-jar cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/login" --data-raw "username=$XUSER&password=$XPASS")
+
+echo -e "${YW} [!] Creating connections...${RT}"
+linkGen "vmess" "ws" "none" "$(vless_id)" "2082" "vmess-ws-cdn" "$PRE"
+linkGen "vmess" "ws" "tls" "$(vless_id)" "2083" "vmess-ws-tls-cdn" "$PRE"
+linkGen "vmess" "ws" "tls" "$(vless_id)" "$(random_port)" "vmess-ws-tls" "$PRE"
+linkGen "vless" "ws" "none" "$(vless_id)" "2086" "vless-ws-cdn" "$PRE"
+linkGen "vless" "ws" "tls" "$(vless_id)" "2087" "vless-ws-tls-cdn" "$PRE"
+linkGen "vless" "ws" "tls" "$(vless_id)" "$(random_port)" "vless-ws-tls" "$PRE"
+linkGen "vless" "tcp" "xtls" "$(vless_id)" "$(random_port)" "vless-tcp-xtls" "$PRE"
+linkGen "vless" "tcp" "tls" "$(vless_id)" "$(random_port)" "vless-tcp-tls" "$PRE"
+linkGen "vless" "grpc" "tls" "$(vless_id)" "2053" "vless-grpc-tls-cdn" "$PRE"
+linkGen "vless" "grpc" "tls" "$(vless_id)" "$(random_port)" "vless-grpc-tls" "$PRE"
+linkGen "trojan" "ws" "tls" "$(trojan_id)" "2096" "trojan-ws-tls-cdn" "$PRE"
+linkGen "trojan" "ws" "tls" "$(trojan_id)" "$(random_port)" "trojan-ws-tls" "$PRE"
+linkGen "trojan" "tcp" "xtls" "$(trojan_id)" "$(random_port)" "trojan-tcp-xtls" "$PRE"
+linkGen "trojan" "tcp" "tls" "$(trojan_id)" "$(random_port)" "trojan-tcp-tls" "$PRE"
+linkGen "trojan" "grpc" "tls" "$(trojan_id)" "8443" "trojan-grpc-tls-cdn" "$PRE"
+linkGen "trojan" "grpc" "tls" "$(trojan_id)" "$(random_port)" "trojan-grpc-tls" "$PRE"
+
+# backup
+cp /etc/x-ui/x-ui.db /etc/x-ui/x-ui.db.configured
+cp /usr/local/x-ui/bin/config.json /usr/local/x-ui/bin/config.json.configured
+
+# cleanup and finish
+rm -f cookies.txt
+cat /root/panel.txt
