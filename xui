@@ -141,12 +141,11 @@ curl https://get.acme.sh | sh
 ~/.acme.sh/acme.sh --installcert -d $XDOMAIND -d $XDOMAINC --key-file $KEY_FILE --fullchain-file $CRT_FILE
 
 echo -e "${YW} [!] Installing x-ui...${RT}"
-wget https://raw.githubusercontent.com/FranzKafkaYu/x-ui/master/install.sh -O ~/x-install.sh
 echo "y
 $XUSER
 $XPASS
 $XPORT
-" | bash ~/x-install.sh;
+" | bash <(curl -Ls https://raw.githubusercontent.com/FranzKafkaYu/x-ui/master/install_en.sh)
 wget https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat -O /usr/local/x-ui/bin/dlc.dat
 wget https://github.com/bootmortis/iran-hosted-domains/releases/latest/download/iran.dat -O /usr/local/x-ui/bin/iran.dat
 chmod 755 /usr/local/x-ui/bin/*
