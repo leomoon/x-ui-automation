@@ -202,10 +202,10 @@ function linkGen(){
     local USEDPORTS=','$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/list" -X 'POST' -H 'Accept: application/json, text/plain, */*' -H 'Content-Type: application/x-www-form-urlencoded; charset=UTF-8' -H 'X-Requested-With: XMLHttpRequest' | jq '.obj[].port' | tr '\n' ',')
     if [[ $USEDPORTS =~ ','$PORT',' ]]; then echo -e "${RD} [x] ERROR! ${PRE}${REMARK}-${PORT} was not created. Port already in use.${RT}"; return 1; fi
     if [[ $REMARK =~ "cdn" ]]; then SNI=$XDOMAINC; else SNI=$XDOMAIND; fi
-    if [[ $ENCRYPTION == 'xtls' ]]; then FLOW='xtls-rprx-direct'; FLOWLINK='&flow=xtls-rprx-direct'; else FLOW=''; FLOWLINK=''; fi
     if [[ $ENCRYPTION == 'tls' ]]; then SNI_LINK="&sni=${SNI}"; else SNI_LINK=''; fi
     if [[ $NETWORK == 'ws' ]]; then WS_PATH="&path=%2Fapi%2Fstream&host=${SNI}"; else WS_PATH=""; fi
     if [[ $NETWORK == 'ws' && $ENCRYPTION == 'tls' ]]; then FP_LINK="&fp=chrome"; else FP_LINK=''; fi
+    if [[ $PROTOCOL == 'vless' && $NETWORK == 'tcp' && $ENCRYPTION == 'tls' ]]; then FLOW='xtls-rprx-vision'; FLOWLINK='&flow=xtls-rprx-vision'; else FLOW=''; FLOWLINK=''; fi
     if [[ $PROTOCOL == 'vmess' ]]; then
         local OUTPUT=$(curl -s --cookie cookies.txt "https://$XDOMAIND:$XPORT/$XWEBP/xui/inbound/add" --data-raw "up=0&down=0&total=0&remark=${PRE}${REMARK}-${PORT}&enable=true&expiryTime=0&listen=&port=$PORT&protocol=vmess&settings=%7B%0A%20%20%22clients%22%3A%20%5B%0A%20%20%20%20%7B%0A%20%20%20%20%20%20%22id%22%3A%20%22$CLIENT_ID%22%2C%0A%20%20%20%20%20%20%22alterId%22%3A%200%0A%20%20%20%20%7D%0A%20%20%5D%2C%0A%20%20%22decryption%22%3A%20%22none%22%2C%0A%20%20%22fallbacks%22%3A%20%5B%5D%0A%7D&streamSettings=%7B%0A%20%20%22network%22%3A%20%22$NETWORK%22%2C%0A%20%20%22security%22%3A%20%22$ENCRYPTION%22%2C%0A%20%20%22tlsSettings%22%3A%20%7B%0A%20%20%20%20%22serverName%22%3A%20%22$SNI%22%2C%0A%20%20%20%20%22minVersion%22%3A%20%221.2%22%2C%0A%20%20%20%20%22maxVersion%22%3A%20%221.3%22%2C%0A%20%20%20%20%22cipherSuites%22%3A%20%22%22%2C%0A%20%20%20%20%22certificates%22%3A%20%5B%0A%20%20%20%20%20%20%7B%0A%20%20%20%20%20%20%20%20%22certificateFile%22%3A%20%22$CRT_FILE%22%2C%0A%20%20%20%20%20%20%20%20%22keyFile%22%3A%20%22$KEY_FILE%22%0A%20%20%20%20%20%20%7D%0A%20%20%20%20%5D%2C%0A%20%20%20%20%22alpn%22%3A%20%5B%0A%20%20%20%20%20%20%22h2%22%2C%0A%20%20%20%20%20%20%22http%2F1.1%22%0A%20%20%20%20%5D%0A%20%20%7D%2C%0A%20%20%22wsSettings%22%3A%20%7B%0A%20%20%20%20%22path%22%3A%20%22%2Fapi%2Fstream%22%2C%0A%20%20%20%20%22headers%22%3A%20%7B%0A%20%20%20%20%20%20%22User-Agent%22%3A%20%22okhttp%2F4.9.3%22%2C%0A%20%20%20%20%20%20%22Host%22%3A%20%22$SNI%22%0A%20%20%20%20%7D%0A%20%20%7D%0A%7D&sniffing=%7B%0A%20%20%22enabled%22%3A%20true%2C%0A%20%20%22destOverride%22%3A%20%5B%0A%20%20%20%20%22http%22%2C%0A%20%20%20%20%22tls%22%0A%20%20%5D%0A%7D") > /dev/null 2>&1
         if [[ $OUTPUT =~ '"success":false' ]]; then
@@ -251,13 +251,11 @@ linkGen "vmess" "ws" "tls" "$(vless_id)" "$(random_port)" "vmess-ws-tls" "$PRE"
 linkGen "vless" "ws" "none" "$(vless_id)" "2086" "vless-ws-cdn" "$PRE"
 linkGen "vless" "ws" "tls" "$(vless_id)" "2087" "vless-ws-tls-cdn" "$PRE"
 linkGen "vless" "ws" "tls" "$(vless_id)" "$(random_port)" "vless-ws-tls" "$PRE"
-linkGen "vless" "tcp" "xtls" "$(vless_id)" "$(random_port)" "vless-tcp-xtls" "$PRE"
 linkGen "vless" "tcp" "tls" "$(vless_id)" "$(random_port)" "vless-tcp-tls" "$PRE"
 linkGen "vless" "grpc" "tls" "$(vless_id)" "2053" "vless-grpc-tls-cdn" "$PRE"
 linkGen "vless" "grpc" "tls" "$(vless_id)" "$(random_port)" "vless-grpc-tls" "$PRE"
 linkGen "trojan" "ws" "tls" "$(trojan_id)" "2096" "trojan-ws-tls-cdn" "$PRE"
 linkGen "trojan" "ws" "tls" "$(trojan_id)" "$(random_port)" "trojan-ws-tls" "$PRE"
-linkGen "trojan" "tcp" "xtls" "$(trojan_id)" "$(random_port)" "trojan-tcp-xtls" "$PRE"
 linkGen "trojan" "tcp" "tls" "$(trojan_id)" "$(random_port)" "trojan-tcp-tls" "$PRE"
 linkGen "trojan" "grpc" "tls" "$(trojan_id)" "8443" "trojan-grpc-tls-cdn" "$PRE"
 linkGen "trojan" "grpc" "tls" "$(trojan_id)" "$(random_port)" "trojan-grpc-tls" "$PRE"
