@@ -1,5 +1,5 @@
 # x-ui-automation
-Installs and configures [FranzKafkaYu/x-ui](https://github.com/FranzKafkaYu/x-ui) with 16 CDN and non CDN connections.
+Installs and configures [FranzKafkaYu/x-ui](https://github.com/FranzKafkaYu/x-ui) with 15 CDN and non CDN connections.
 
 Tested with FranzKafkaYu/x-ui version `0.3.4.0`.
 
